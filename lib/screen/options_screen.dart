@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:mobile/screen/profile_screen.dart';
+import 'package:SimpleChat/screen/profile_screen.dart';
 import '../models/user_model.dart';
 import '../core/constants/app_colors.dart';
 import '../l10n/app_localizations.dart';

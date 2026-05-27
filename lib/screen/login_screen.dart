@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:mobile/core/constants/app_colors.dart';
+import 'package:SimpleChat/core/constants/app_colors.dart';
 import '../services/auth_service.dart';
 import 'register_screen.dart';
 import 'chat_list_screen.dart';

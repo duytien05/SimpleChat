@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../core/utils/mock_users.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/user_model.dart';
 import 'chat_screen.dart';
 import '../core/constants/app_colors.dart';
@@ -18,26 +18,38 @@ class _SearchUserScreenState extends State<SearchUserScreen> {
 
   User? foundUser;
   String message = "";
+  List<User> recentUsers = [];
 
-  List<User> recentUsers = [mockUsers[0], mockUsers[1], mockUsers[2]];
+  @override
+  void initState() {
+    super.initState();
+    fetchRecentUsers();
+  }
 
-  void searchUser() {
-    String phone = controller.text.trim();
-
-    for (User user in mockUsers) {
-      if (user.phone == phone) {
-        setState(() {
-          foundUser = user;
-          message = "";
-        });
-        return;
-      }
-    }
-
+  Future<void> fetchRecentUsers() async {
+    final snapshot = await FirebaseFirestore.instance.collection('users').limit(3).get();
     setState(() {
-      foundUser = null;
-      message = AppLocalizations.of(context)!.phoneNotExist;
+      recentUsers = snapshot.docs.map((doc) => User.fromJson(doc.data())).toList();
     });
+  }
+
+  Future<void> searchUser() async {
+    String phone = controller.text.trim();
+    final snapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .where('phone', isEqualTo: phone)
+        .get();
+    if (snapshot.docs.isNotEmpty) {
+      setState(() {
+        foundUser = User.fromJson(snapshot.docs.first.data());
+        message = "";
+      });
+    } else {
+      setState(() {
+        foundUser = null;
+        message = AppLocalizations.of(context)!.phoneNotExist;
+      });
+    }
   }
 
   @override
