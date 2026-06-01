@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import '../models/user_model.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart'
+    as fb_auth;
 import 'chat_list_screen.dart';
 import 'search_user_screen.dart';
 import 'chat_screen.dart';
@@ -10,7 +12,8 @@ class ContactsScreen extends StatefulWidget {
   const ContactsScreen({Key? key}) : super(key: key);
 
   @override
-  State<ContactsScreen> createState() => _ContactsScreenState();
+  State<ContactsScreen> createState() =>
+      _ContactsScreenState();
 }
 
 class _ContactsScreenState extends State<ContactsScreen>
@@ -23,19 +26,35 @@ class _ContactsScreenState extends State<ContactsScreen>
     tabController = TabController(length: 2, vsync: this);
   }
 
-  // Lấy danh sách user từ Firestore
+  @override
+  void dispose() {
+    tabController.dispose();
+    super.dispose();
+  }
+
+  // Lấy danh sách user từ Firestore (loại trừ user hiện tại)
   Future<List<User>> fetchUsers() async {
-    final snapshot = await FirebaseFirestore.instance.collection('users').get();
-    return snapshot.docs.map((doc) => User.fromJson(doc.data())).toList();
+    final currentUid =
+        fb_auth.FirebaseAuth.instance.currentUser?.uid;
+    final snapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .get();
+    final users = <User>[];
+    for (final doc in snapshot.docs) {
+      if (currentUid != null && doc.id == currentUid)
+        continue;
+      final data = doc.data() as Map<String, dynamic>;
+      users.add(User.fromJson(data));
+    }
+    return users;
   }
 
   Map<String, List<User>> groupContacts(List<User> users) {
-    Map<String, List<User>> map = {};
-    for (User user in users) {
-      String letter = user.name[0].toUpperCase();
-      if (!map.containsKey(letter)) {
-        map[letter] = [];
-      }
+    final Map<String, List<User>> map = {};
+    for (final user in users) {
+      final name = (user.name.isNotEmpty) ? user.name : '#';
+      final letter = name[0].toUpperCase();
+      map.putIfAbsent(letter, () => []);
       map[letter]!.add(user);
     }
     return map;
@@ -61,7 +80,8 @@ class _ContactsScreenState extends State<ContactsScreen>
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (_) => const SearchUserScreen(),
+                            builder: (_) =>
+                                const SearchUserScreen(),
                           ),
                         );
                       },
@@ -72,14 +92,17 @@ class _ContactsScreenState extends State<ContactsScreen>
                         ),
                         decoration: BoxDecoration(
                           color: Colors.white,
-                          borderRadius: BorderRadius.circular(25),
+                          borderRadius:
+                              BorderRadius.circular(25),
                         ),
                         child: Row(
                           children: [
-                            const Icon(Icons.search, color: Colors.grey),
+                            const Icon(Icons.search,
+                                color: Colors.grey),
                             const SizedBox(width: 8),
                             Text(
-                              AppLocalizations.of(context)!.search,
+                              AppLocalizations.of(context)!
+                                  .search,
                               style: const TextStyle(
                                 color: Colors.grey,
                                 fontSize: 16,
@@ -95,12 +118,15 @@ class _ContactsScreenState extends State<ContactsScreen>
 
                   /// ADD FRIEND
                   IconButton(
-                    icon: const Icon(Icons.person_add_alt, color: Colors.white),
+                    icon: const Icon(Icons.person_add_alt,
+                        color: Colors.white),
                     onPressed: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
+                      ScaffoldMessenger.of(context)
+                          .showSnackBar(
                         SnackBar(
                           content: Text(
-                            AppLocalizations.of(context)!.addFriend,
+                            AppLocalizations.of(context)!
+                                .addFriend,
                           ),
                         ),
                       );
@@ -120,8 +146,12 @@ class _ContactsScreenState extends State<ContactsScreen>
               unselectedLabelColor: Colors.grey,
               indicatorColor: Colors.blue,
               tabs: [
-                Tab(text: AppLocalizations.of(context)!.friends),
-                Tab(text: AppLocalizations.of(context)!.groups),
+                Tab(
+                    text: AppLocalizations.of(context)!
+                        .friends),
+                Tab(
+                    text: AppLocalizations.of(context)!
+                        .groups),
               ],
             ),
           ),
@@ -135,29 +165,40 @@ class _ContactsScreenState extends State<ContactsScreen>
                 FutureBuilder<List<User>>(
                   future: fetchUsers(),
                   builder: (context, snapshot) {
-                    if (snapshot.connectionState == ConnectionState.waiting) {
-                      return const Center(child: CircularProgressIndicator());
+                    if (snapshot.connectionState ==
+                        ConnectionState.waiting) {
+                      return const Center(
+                          child:
+                              CircularProgressIndicator());
                     }
-                    if (!snapshot.hasData || snapshot.data!.isEmpty) {
-                      return Center(child: Text('No users found'));
+                    if (!snapshot.hasData ||
+                        snapshot.data!.isEmpty) {
+                      return Center(
+                          child: Text('No users found'));
                     }
-                    final grouped = groupContacts(snapshot.data!);
-                    final letters = grouped.keys.toList()..sort();
+                    final grouped =
+                        groupContacts(snapshot.data!);
+                    final letters = grouped.keys.toList()
+                      ..sort();
                     return ListView(
                       children: [
                         ListTile(
                           leading: const CircleAvatar(
                             backgroundColor: Colors.blue,
-                            child: Icon(Icons.group, color: Colors.white),
+                            child: Icon(Icons.group,
+                                color: Colors.white),
                           ),
                           title: Text(
                             "${AppLocalizations.of(context)!.friendRequest} (27)",
                           ),
                           onTap: () {
-                            ScaffoldMessenger.of(context).showSnackBar(
+                            ScaffoldMessenger.of(context)
+                                .showSnackBar(
                               SnackBar(
                                 content: Text(
-                                  AppLocalizations.of(context)!.friendRequest,
+                                  AppLocalizations.of(
+                                          context)!
+                                      .friendRequest,
                                 ),
                               ),
                             );
@@ -165,26 +206,35 @@ class _ContactsScreenState extends State<ContactsScreen>
                         ),
                         const Divider(),
                         ...letters.map((letter) {
-                          List<User> users = grouped[letter]!;
+                          final users = grouped[letter]!;
                           return Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                            crossAxisAlignment:
+                                CrossAxisAlignment.start,
                             children: [
                               Padding(
-                                padding: const EdgeInsets.all(10),
+                                padding:
+                                    const EdgeInsets.all(
+                                        10),
                                 child: Text(
                                   letter,
                                   style: const TextStyle(
                                     fontSize: 18,
-                                    fontWeight: FontWeight.bold,
+                                    fontWeight:
+                                        FontWeight.bold,
                                   ),
                                 ),
                               ),
                               ...users.map((user) {
                                 return ListTile(
-                                  leading: CircleAvatar(child: Text(user.name[0])),
+                                  leading: CircleAvatar(
+                                      child: Text(user.name
+                                              .isNotEmpty
+                                          ? user.name[0]
+                                          : '?')),
                                   title: Text(user.name),
                                   trailing: const Row(
-                                    mainAxisSize: MainAxisSize.min,
+                                    mainAxisSize:
+                                        MainAxisSize.min,
                                     children: [
                                       Icon(Icons.call),
                                       SizedBox(width: 10),
@@ -195,7 +245,9 @@ class _ContactsScreenState extends State<ContactsScreen>
                                     Navigator.push(
                                       context,
                                       MaterialPageRoute(
-                                        builder: (_) => ChatScreen(user),
+                                        builder: (_) =>
+                                            ChatScreen(
+                                                user),
                                       ),
                                     );
                                   },
@@ -209,7 +261,10 @@ class _ContactsScreenState extends State<ContactsScreen>
                   },
                 ),
                 // ===== GROUP TAB =====
-                Center(child: Text(AppLocalizations.of(context)!.groupList)),
+                Center(
+                    child: Text(
+                        AppLocalizations.of(context)!
+                            .groupList)),
               ],
             ),
           ),
