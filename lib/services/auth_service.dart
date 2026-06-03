@@ -1,37 +1,37 @@
+import 'package:firebase_auth/firebase_auth.dart';
+
 class AuthService {
-  static List<Map<String, dynamic>> users = [];
+  final FirebaseAuth _auth = FirebaseAuth.instance;
 
-  static Map<String, dynamic>? currentUser;
-
-  static Future<Map<String, dynamic>> register(
-    Map<String, dynamic> user,
-  ) async {
-    await Future.delayed(const Duration(seconds: 1));
-
-    for (var u in users) {
-      if (u["email"] == user["email"]) {
-        return {"success": false, "message": "Email đã tồn tại"};
-      }
+  // Chức năng đổi mật khẩu kiểm tra mật khẩu cũ
+  Future<void> changePassword({
+    required String oldPassword,
+    required String newPassword,
+  }) async {
+    User? user = _auth.currentUser;
+    if (user == null || user.email == null) {
+      throw Exception("Người dùng chưa đăng nhập.");
     }
 
-    users.add(user);
-    return {"success": true};
-  }
+    // Bước 1: Xác thực lại bằng mật khẩu cũ (Re-authenticate)
+    AuthCredential credential =
+        EmailAuthProvider.credential(
+      email: user.email!,
+      password: oldPassword,
+    );
 
-  /// LOGIN
-  static Future<Map<String, dynamic>> login(
-    String email,
-    String password,
-  ) async {
-    await Future.delayed(const Duration(seconds: 1));
-
-    for (var u in users) {
-      if (u["email"] == email && u["password"] == password) {
-        currentUser = u;
-        return {"success": true};
+    try {
+      await user.reauthenticateWithCredential(credential);
+      // Bước 2: Tiến hành cập nhật mật khẩu mới nếu mật khẩu cũ đúng
+      await user.updatePassword(newPassword);
+    } on FirebaseAuthException catch (e) {
+      if (e.code == 'wrong-password' ||
+          e.code == 'invalid-credential') {
+        throw Exception("Mật khẩu cũ không chính xác.");
+      } else {
+        throw Exception(
+            e.message ?? "Đã xảy ra lỗi hệ thống.");
       }
     }
-
-    return {"success": false, "message": "Sai email hoặc mật khẩu"};
   }
 }
