@@ -2,7 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:convert'; // Đọc chuỗi ảnh Base64 từ bộ nhớ Web
+import 'package:image_picker/image_picker.dart'; // Chọn ảnh từ thiết bị
+import 'package:image/image.dart'
+    as img; // Nén dung lượng ảnh
+import 'package:record/record.dart'; // Ghi âm đa nền tảng (Web & Mobile)
 import '../services/group_info.dart';
+import '../services/chat_interaction_service.dart';
+import '../services/voice_message_bubble.dart'; // Import Widget nghe nhạc thoại của bạn
 
 class GroupChatScreen extends StatefulWidget {
   final String chatId;
@@ -28,10 +34,29 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       FirebaseAuth.instance.currentUser!.uid;
   String myDisplayName = "Thành viên";
 
+  // Cấu hình các đối tượng phục vụ ghi âm
+  final AudioRecorder _audioRecorder = AudioRecorder();
+  bool _isRecording = false;
+
   @override
   void initState() {
     super.initState();
     _loadMyProfile();
+
+    // Mỗi khi người dùng vào nhóm chat, tự động đánh dấu các tin nhắn mới là "Đã xem"
+    ChatInteractionService.markMessagesAsRead(
+      chatId: widget.chatId,
+      currentUserId: currentUserId,
+    );
+  }
+
+  @override
+  void dispose() {
+    _messageController.dispose();
+    _scrollController.dispose();
+    _audioRecorder
+        .dispose(); // Giải phóng bộ nhớ trình ghi âm khi thoát nhóm
+    super.dispose();
   }
 
   void _loadMyProfile() async {
@@ -47,11 +72,23 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     }
   }
 
-  // ==========================================
-  // LOGIC HIỂN THỊ DANH SÁCH BẠN BÈ & THÊM THÀNH VIÊN
-  // ==========================================
+  // Hàm giải mã hiển thị ảnh an toàn từ chuỗi Base64
+  ImageProvider? _parseImageBase64(String base64Str) {
+    try {
+      if (base64Str.startsWith('data:image')) {
+        return MemoryImage(
+            base64Decode(base64Str.split(',')[1]));
+      }
+      return MemoryImage(base64Decode(base64Str));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // ===========================================================================
+  // LOGIC HIỂN THỊ DANH SÁCH BẠN BÈ & THÊM THÀNH VIÊN (ĐÃ SỬA CHỈ HIỆN BẠN BÈ)
+  // ===========================================================================
   void _showAddMemberBottomSheet() async {
-    // 1. Lấy dữ liệu phòng chat hiện tại để biết ai đã có sẵn trong nhóm
     DocumentSnapshot chatDoc = await FirebaseFirestore
         .instance
         .collection('chats')
@@ -65,7 +102,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
     if (!mounted) return;
 
-    // 2. Mở BottomSheet hiển thị danh sách bạn bè
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -75,8 +111,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
             BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (context) {
-        List<String> selectedUserIds =
-            []; // Danh sách lưu các UID được tích chọn
+        List<String> selectedUserIds = [];
 
         return StatefulBuilder(
           builder: (context, setModalState) {
@@ -88,7 +123,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                 crossAxisAlignment:
                     CrossAxisAlignment.start,
                 children: [
-                  // Thanh tiêu đề của BottomSheet
                   Row(
                     mainAxisAlignment:
                         MainAxisAlignment.spaceBetween,
@@ -108,32 +142,33 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                   ),
                   const Divider(),
                   const SizedBox(height: 8),
-
-                  // Đọc danh sách bạn bè từ Firestore (collection 'users')
                   Expanded(
-                    child: StreamBuilder<QuerySnapshot>(
+                    // BƯỚC 1: Lắng nghe tài liệu cá nhân của mình để lấy danh sách UID bạn bè (mảng 'friends')
+                    child: StreamBuilder<DocumentSnapshot>(
                       stream: FirebaseFirestore.instance
                           .collection('users')
+                          .doc(currentUserId)
                           .snapshots(),
-                      builder: (context, snapshot) {
-                        if (!snapshot.hasData) {
+                      builder: (context, userSnapshot) {
+                        if (!userSnapshot.hasData ||
+                            !userSnapshot.data!.exists) {
                           return const Center(
                               child:
                                   CircularProgressIndicator());
                         }
 
-                        // Lọc bỏ chính mình và những người ĐÃ Ở TRONG NHÓM
-                        var friends = snapshot.data!.docs
-                            .where((doc) {
-                          return doc.id != currentUserId &&
-                              !existingParticipants
-                                  .contains(doc.id);
-                        }).toList();
+                        var myData = userSnapshot.data!
+                                    .data()
+                                as Map<String, dynamic>? ??
+                            {};
+                        List<dynamic> myFriendsList =
+                            myData['friends'] ?? [];
 
-                        if (friends.isEmpty) {
+                        // Trường hợp bạn chưa kết bạn với ai cả
+                        if (myFriendsList.isEmpty) {
                           return const Center(
                             child: Text(
-                              "Tất cả bạn bè của bạn đã có mặt trong nhóm.",
+                              "Danh sách bạn bè trống. Hãy kết bạn trước khi thêm vào nhóm.",
                               style: TextStyle(
                                   color: Colors.grey,
                                   fontSize: 14),
@@ -142,76 +177,123 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                           );
                         }
 
-                        return ListView.builder(
-                          itemCount: friends.length,
-                          itemBuilder: (context, index) {
-                            var friendData =
-                                friends[index].data()
-                                    as Map<String, dynamic>;
-                            String friendId =
-                                friends[index].id;
-                            String name =
-                                friendData['displayName'] ??
-                                    "Người dùng";
-                            String photoUrl =
-                                friendData['photoUrl'] ??
-                                    "";
-                            bool isChecked = selectedUserIds
-                                .contains(friendId);
-
-                            // Giải mã Avatar của bạn bè
-                            ImageProvider? avatarImg;
-                            if (photoUrl.isNotEmpty) {
-                              if (photoUrl.startsWith(
-                                  'data:image')) {
-                                try {
-                                  avatarImg = MemoryImage(
-                                      base64Decode(photoUrl
-                                          .split(',')[1]));
-                                } catch (_) {}
-                              } else {
-                                avatarImg =
-                                    NetworkImage(photoUrl);
-                              }
+                        // BƯỚC 2: Truy vấn collection 'users' dùng bộ lọc 'whereIn' chỉ lấy những người có trong danh sách bạn bè
+                        return StreamBuilder<QuerySnapshot>(
+                          stream: FirebaseFirestore.instance
+                              .collection('users')
+                              .where('uid',
+                                  whereIn: myFriendsList)
+                              .snapshots(),
+                          builder: (context, snapshot) {
+                            if (!snapshot.hasData) {
+                              return const Center(
+                                  child:
+                                      CircularProgressIndicator());
                             }
 
-                            return CheckboxListTile(
-                              activeColor:
-                                  const Color(0xFF0068FF),
-                              title: Text(name,
-                                  style: const TextStyle(
-                                      fontWeight:
-                                          FontWeight.w500)),
-                              secondary: CircleAvatar(
-                                radius: 20,
-                                backgroundColor:
-                                    const Color(0xFF0068FF),
-                                backgroundImage: avatarImg,
-                                child: avatarImg == null
-                                    ? Text(
-                                        name.isNotEmpty
-                                            ? name[0]
-                                                .toUpperCase()
-                                            : 'U',
-                                        style: const TextStyle(
-                                            color: Colors
-                                                .white,
-                                            fontWeight:
-                                                FontWeight
-                                                    .bold))
-                                    : null,
-                              ),
-                              value: isChecked,
-                              onChanged: (bool? value) {
-                                setModalState(() {
-                                  if (value == true) {
+                            // BƯỚC 3: Lọc bỏ những người bạn đã nằm sẵn trong nhóm chat từ trước
+                            var friends = snapshot
+                                .data!.docs
+                                .where((doc) {
+                              return !existingParticipants
+                                  .contains(doc.id);
+                            }).toList();
+
+                            if (friends.isEmpty) {
+                              return const Center(
+                                child: Text(
+                                  "Tất cả bạn bè của bạn đã có mặt trong nhóm.",
+                                  style: TextStyle(
+                                      color: Colors.grey,
+                                      fontSize: 14),
+                                  textAlign:
+                                      TextAlign.center,
+                                ),
+                              );
+                            }
+
+                            return ListView.builder(
+                              itemCount: friends.length,
+                              itemBuilder:
+                                  (context, index) {
+                                var friendData =
+                                    friends[index].data()
+                                        as Map<String,
+                                            dynamic>;
+                                String friendId =
+                                    friends[index].id;
+                                String name = friendData[
+                                        'displayName'] ??
+                                    "Người dùng";
+                                String photoUrl =
+                                    friendData[
+                                            'photoUrl'] ??
+                                        "";
+                                bool isChecked =
                                     selectedUserIds
-                                        .add(friendId);
+                                        .contains(friendId);
+
+                                ImageProvider? avatarImg;
+                                if (photoUrl.isNotEmpty) {
+                                  if (photoUrl.startsWith(
+                                      'data:image')) {
+                                    try {
+                                      avatarImg = MemoryImage(
+                                          base64Decode(
+                                              photoUrl.split(
+                                                  ',')[1]));
+                                    } catch (_) {}
                                   } else {
-                                    selectedUserIds
-                                        .remove(friendId);
+                                    avatarImg =
+                                        NetworkImage(
+                                            photoUrl);
                                   }
-                                });
+                                }
+
+                                return CheckboxListTile(
+                                  activeColor: const Color(
+                                      0xFF0068FF),
+                                  title: Text(name,
+                                      style: const TextStyle(
+                                          fontWeight:
+                                              FontWeight
+                                                  .w500)),
+                                  secondary: CircleAvatar(
+                                    radius: 20,
+                                    backgroundColor:
+                                        const Color(
+                                            0xFF0068FF),
+                                    backgroundImage:
+                                        avatarImg,
+                                    child: avatarImg == null
+                                        ? Text(
+                                            name.isNotEmpty
+                                                ? name[0]
+                                                    .toUpperCase()
+                                                : 'U',
+                                            style: const TextStyle(
+                                                color: Colors
+                                                    .white,
+                                                fontWeight:
+                                                    FontWeight
+                                                        .bold),
+                                          )
+                                        : null,
+                                  ),
+                                  value: isChecked,
+                                  onChanged: (bool? value) {
+                                    setModalState(() {
+                                      if (value == true) {
+                                        selectedUserIds
+                                            .add(friendId);
+                                      } else {
+                                        selectedUserIds
+                                            .remove(
+                                                friendId);
+                                      }
+                                    });
+                                  },
+                                );
                               },
                             );
                           },
@@ -219,8 +301,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                       },
                     ),
                   ),
-
-                  // Nút bấm xác nhận thêm vào nhóm
                   SizedBox(
                     width: double.infinity,
                     height: 48,
@@ -235,7 +315,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                       onPressed: selectedUserIds.isEmpty
                           ? null
                           : () async {
-                              // Cập nhật thêm các UID mới vào mảng participants trên Firestore
                               await FirebaseFirestore
                                   .instance
                                   .collection('chats')
@@ -276,34 +355,109 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     );
   }
 
+  // 1. GỬI TIN NHẮN CHỮ VÀO NHÓM
   void _sendMessage() async {
     String msg = _messageController.text.trim();
-    if (msg.isEmpty) {
-      return;
-    }
+    if (msg.isEmpty) return;
 
     _messageController
-        .clear(); // Xóa chữ ô nhập ngay lập tức
+        .clear(); // Xóa chữ ô nhập lập tức tránh double-send
 
-    await FirebaseFirestore.instance
-        .collection('chats')
-        .doc(widget.chatId)
-        .collection('messages')
-        .add({
-      'senderId': currentUserId,
-      'senderName': myDisplayName,
-      'message': msg,
-      'timestamp': FieldValue.serverTimestamp(),
-    });
+    await ChatInteractionService.sendMessageWithStatus(
+      chatId: widget.chatId,
+      senderId: currentUserId,
+      senderName: myDisplayName,
+      messageText: msg,
+      isGroup: true,
+      type: 'text',
+    );
 
-    await FirebaseFirestore.instance
-        .collection('chats')
-        .doc(widget.chatId)
-        .update({
-      'lastMessage': '$myDisplayName: $msg',
-      'lastMessageTime': FieldValue.serverTimestamp(),
-    });
+    _scrollToBottom();
+  }
 
+  // 2. GỬI HÌNH ẢNH NÉN VÀO NHÓM CHAT
+  void _handleSendImage() async {
+    final ImagePicker picker = ImagePicker();
+    final XFile? pickedFile =
+        await picker.pickImage(source: ImageSource.gallery);
+
+    if (pickedFile != null) {
+      try {
+        var bytes = await pickedFile.readAsBytes();
+        img.Image? decoded = img.decodeImage(bytes);
+        if (decoded != null) {
+          img.Image resized = img.copyResize(decoded,
+              width: 500); // Đưa về bề rộng tối ưu 500px
+          List<int> compressed = img.encodeJpg(resized,
+              quality:
+                  60); // Giảm chất lượng lưu trữ xuống 60%
+          String base64Image =
+              "data:image/jpeg;base64,${base64Encode(compressed)}";
+
+          await ChatInteractionService
+              .sendMessageWithStatus(
+            chatId: widget.chatId,
+            senderId: currentUserId,
+            senderName: myDisplayName,
+            messageText: base64Image,
+            isGroup: true,
+            type: 'image',
+          );
+          _scrollToBottom();
+        }
+      } catch (e) {
+        print("Lỗi xử lý hình ảnh nhóm: $e");
+      }
+    }
+  }
+
+  // 3. XỬ LÝ BẬT / DỪNG GHI ÂM TIN NHẮN THOẠI NHÓM
+  void _toggleRecording() async {
+    if (_isRecording) {
+      final path = await _audioRecorder.stop();
+      setState(() {
+        _isRecording = false;
+      });
+
+      if (path != null) {
+        try {
+          final bytes = await XFile(path).readAsBytes();
+          String base64Audio =
+              "data:audio/webm;base64,${base64Encode(bytes)}";
+
+          await ChatInteractionService
+              .sendMessageWithStatus(
+            chatId: widget.chatId,
+            senderId: currentUserId,
+            senderName: myDisplayName,
+            messageText: base64Audio,
+            isGroup: true,
+            type: 'audio',
+          );
+          _scrollToBottom();
+        } catch (e) {
+          print("Lỗi mã hóa âm thanh nhóm: $e");
+        }
+      }
+    } else {
+      if (await _audioRecorder.hasPermission()) {
+        await _audioRecorder.start(
+          const RecordConfig(
+            encoder: AudioEncoder
+                .opus, // Định dạng chuẩn Opus chạy mượt đa nền tảng
+            bitRate: 16000,
+            sampleRate: 16000,
+          ),
+          path: '',
+        );
+        setState(() {
+          _isRecording = true;
+        });
+      }
+    }
+  }
+
+  void _scrollToBottom() {
     Future.delayed(const Duration(milliseconds: 100), () {
       if (_scrollController.hasClients) {
         _scrollController.animateTo(
@@ -313,6 +467,53 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         );
       }
     });
+  }
+
+  // 4. HÀM RENDER LINH HOẠT NỘI DUNG TIN NHẮN THEO LOẠI TYPE
+  Widget _buildMessageBody(String type, String content,
+      bool isRevoked, bool isMe) {
+    if (isRevoked) {
+      return Text(
+        content,
+        style: TextStyle(
+          fontStyle: FontStyle.italic,
+          color: isMe ? Colors.black54 : Colors.black54,
+          fontSize: 15,
+        ),
+      );
+    }
+
+    switch (type) {
+      case 'image':
+        var imgProvider = _parseImageBase64(content);
+        return imgProvider != null
+            ? ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: Image(
+                  image: imgProvider,
+                  width: 200,
+                  fit: BoxFit.cover,
+                ),
+              )
+            : const Text("[Hình ảnh lỗi]",
+                style: TextStyle(color: Colors.red));
+
+      case 'audio':
+        // Gọi Widget giải mã chuỗi base64 và thực hiện click nghe nhạc thoại
+        return VoiceMessageBubble(
+          base64Audio: content,
+          isMe: isMe,
+        );
+
+      default: // 'text'
+        return Text(
+          content,
+          style: TextStyle(
+            fontSize: 15,
+            color: isMe ? Colors.white : Colors.black87,
+          ),
+        );
+    }
   }
 
   @override
@@ -360,7 +561,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           },
         ),
         actions: [
-          // NÚT CHỨC NĂNG THÊM THÀNH VIÊN MỚI VÀO NHÓM
           IconButton(
             icon: const Icon(Icons.person_add_alt_1,
                 color: Colors.white, size: 24),
@@ -395,9 +595,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
               Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (_) => GroupInfoScreen(
-                      chatId: widget.chatId),
-                ),
+                    builder: (_) => GroupInfoScreen(
+                        chatId: widget.chatId)),
               );
             },
           ),
@@ -405,6 +604,82 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       ),
       body: Column(
         children: [
+          StreamBuilder<DocumentSnapshot>(
+            stream: FirebaseFirestore.instance
+                .collection('chats')
+                .doc(widget.chatId)
+                .snapshots(),
+            builder: (context, chatSnapshot) {
+              if (!chatSnapshot.hasData ||
+                  !chatSnapshot.data!.exists)
+                return const SizedBox.shrink();
+
+              var chatData = chatSnapshot.data!.data()
+                  as Map<String, dynamic>;
+              if (chatData['pinnedMessage'] == null)
+                return const SizedBox.shrink();
+
+              var pinnedData = chatData['pinnedMessage']
+                  as Map<String, dynamic>;
+              String pinnedText =
+                  pinnedData['message'] ?? '';
+              String pinnedSender =
+                  pinnedData['senderName'] ?? 'Thành viên';
+
+              return Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 14, vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE3F2FD),
+                  border: Border(
+                    bottom: BorderSide(
+                        color: Colors.blue[200]!,
+                        width: 0.5),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.push_pin,
+                        color: Color(0xFF0068FF), size: 18),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment:
+                            CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '$pinnedSender đã ghim:',
+                            style: const TextStyle(
+                                fontSize: 11,
+                                color: Color(0xFF0068FF),
+                                fontWeight:
+                                    FontWeight.bold),
+                          ),
+                          Text(
+                            pinnedText,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 13,
+                                color: Colors.black87),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close,
+                          size: 18, color: Colors.grey),
+                      onPressed: () {
+                        ChatInteractionService.unpinMessage(
+                            chatId: widget.chatId);
+                      },
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+
           // DANH SÁCH TIN NHẮN REALTIME
           Expanded(
             child: StreamBuilder<QuerySnapshot>(
@@ -438,6 +713,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                   itemBuilder: (context, index) {
                     var msgData = docs[index].data()
                         as Map<String, dynamic>;
+                    String messageId = docs[index].id;
                     bool isMe = msgData['senderId'] ==
                         currentUserId;
                     String senderId =
@@ -445,110 +721,251 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                     String senderName =
                         msgData['senderName'] ??
                             "Thành viên";
-                    String messageText =
-                        msgData['message'] ?? "";
 
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(
-                          vertical: 4.0),
-                      child: Row(
-                        mainAxisAlignment: isMe
-                            ? MainAxisAlignment.end
-                            : MainAxisAlignment.start,
-                        crossAxisAlignment:
-                            CrossAxisAlignment.start,
-                        children: [
-                          if (!isMe) ...[
-                            GroupSenderAvatarWidget(
-                              senderId: senderId,
-                              fallbackName: senderName,
-                            ),
-                            const SizedBox(width: 8),
-                          ],
-                          Flexible(
-                            child: Column(
-                              crossAxisAlignment: isMe
-                                  ? CrossAxisAlignment.end
-                                  : CrossAxisAlignment
-                                      .start,
-                              children: [
-                                if (!isMe)
-                                  Padding(
-                                    padding:
-                                        const EdgeInsets
-                                            .only(
-                                            left: 4,
-                                            bottom: 3),
-                                    child: Text(senderName,
-                                        style: const TextStyle(
+                    bool isRevoked =
+                        msgData['isRevoked'] ?? false;
+                    List<dynamic> readByList =
+                        msgData['readBy'] ?? [];
+                    String type = msgData['type'] ?? 'text';
+                    String messageText =
+                        msgData['message'] ??
+                            msgData['text'] ??
+                            "";
+
+                    return GestureDetector(
+                      onLongPress: () {
+                        if (!isRevoked) {
+                          showDialog(
+                            context: context,
+                            builder: (context) =>
+                                AlertDialog(
+                              shape: RoundedRectangleBorder(
+                                  borderRadius:
+                                      BorderRadius.circular(
+                                          12)),
+                              title: const Text(
+                                  'Tùy chọn tin nhắn',
+                                  style: TextStyle(
+                                      fontWeight:
+                                          FontWeight.bold,
+                                      fontSize: 16)),
+                              content: const Text(
+                                  'Chọn thao tác bạn muốn thực hiện đối với tin nhắn này.'),
+                              actions: [
+                                TextButton(
+                                  onPressed: () {
+                                    Navigator.pop(context);
+                                    ChatInteractionService
+                                        .pinMessage(
+                                      chatId: widget.chatId,
+                                      messageId: messageId,
+                                      messageText:
+                                          messageText,
+                                      senderName:
+                                          senderName,
+                                      isGroup: true,
+                                      type:
+                                          type, // Đồng bộ truyền type ghim hình ảnh/voice
+                                    );
+                                  },
+                                  child: const Text(
+                                      'Ghim lên nhóm',
+                                      style: TextStyle(
+                                          color: Color(
+                                              0xFF0068FF),
+                                          fontWeight:
+                                              FontWeight
+                                                  .bold)),
+                                ),
+                                if (isMe)
+                                  TextButton(
+                                    onPressed: () async {
+                                      Navigator.pop(
+                                          context);
+                                      await ChatInteractionService
+                                          .revokeMessage(
+                                        chatId:
+                                            widget.chatId,
+                                        messageId:
+                                            messageId,
+                                        senderName:
+                                            myDisplayName,
+                                        isGroup: true,
+                                      );
+                                    },
+                                    child: const Text(
+                                        'Thu hồi',
+                                        style: TextStyle(
+                                            color:
+                                                Colors.red,
                                             fontWeight:
                                                 FontWeight
-                                                    .w500,
-                                            color: Colors
-                                                .blueGrey,
-                                            fontSize: 11)),
+                                                    .bold)),
                                   ),
-                                Container(
-                                  padding:
-                                      const EdgeInsets.all(
-                                          12),
-                                  constraints:
-                                      BoxConstraints(
-                                    maxWidth: MediaQuery.of(
-                                                context)
-                                            .size
-                                            .width *
-                                        0.65,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: isMe
-                                        ? const Color(
-                                            0xFF0068FF)
-                                        : const Color(
-                                            0xFFF1F0F0),
-                                    borderRadius:
-                                        BorderRadius.only(
-                                      topLeft: const Radius
-                                          .circular(16),
-                                      topRight: const Radius
-                                          .circular(16),
-                                      bottomLeft:
-                                          Radius.circular(
-                                              isMe
-                                                  ? 16
-                                                  : 0),
-                                      bottomRight:
-                                          Radius.circular(
-                                              isMe
-                                                  ? 0
-                                                  : 16),
-                                    ),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: Colors.black
-                                            .withOpacity(
-                                                0.01),
-                                        blurRadius: 2,
-                                        offset:
-                                            const Offset(
-                                                0, 1),
-                                      )
-                                    ],
-                                  ),
-                                  child: Text(
-                                    messageText,
-                                    style: TextStyle(
-                                        fontSize: 15,
-                                        color: isMe
-                                            ? Colors.white
-                                            : Colors
-                                                .black87),
-                                  ),
+                                TextButton(
+                                  onPressed: () =>
+                                      Navigator.pop(
+                                          context),
+                                  child: const Text('Hủy',
+                                      style: TextStyle(
+                                          color:
+                                              Colors.grey)),
                                 ),
                               ],
                             ),
-                          ),
-                        ],
+                          );
+                        }
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            vertical: 4.0),
+                        child: Row(
+                          mainAxisAlignment: isMe
+                              ? MainAxisAlignment.end
+                              : MainAxisAlignment.start,
+                          crossAxisAlignment:
+                              CrossAxisAlignment.start,
+                          children: [
+                            if (!isMe) ...[
+                              GroupSenderAvatarWidget(
+                                senderId: senderId,
+                                fallbackName: senderName,
+                              ),
+                              const SizedBox(width: 8),
+                            ],
+                            Flexible(
+                              child: Column(
+                                crossAxisAlignment: isMe
+                                    ? CrossAxisAlignment.end
+                                    : CrossAxisAlignment
+                                        .start,
+                                children: [
+                                  if (!isMe)
+                                    Padding(
+                                      padding:
+                                          const EdgeInsets
+                                              .only(
+                                              left: 4,
+                                              bottom: 3),
+                                      child: Text(
+                                          senderName,
+                                          style: const TextStyle(
+                                              fontWeight:
+                                                  FontWeight
+                                                      .w500,
+                                              color: Colors
+                                                  .blueGrey,
+                                              fontSize:
+                                                  11)),
+                                    ),
+                                  Container(
+                                    padding: EdgeInsets.all(
+                                        type == 'image' &&
+                                                !isRevoked
+                                            ? 4
+                                            : 12),
+                                    constraints:
+                                        BoxConstraints(
+                                      maxWidth: MediaQuery.of(
+                                                  context)
+                                              .size
+                                              .width *
+                                          0.65,
+                                    ),
+                                    decoration:
+                                        BoxDecoration(
+                                      color: isMe
+                                          ? (isRevoked
+                                              ? Colors
+                                                  .grey[200]
+                                              : const Color(
+                                                  0xFF0068FF))
+                                          : const Color(
+                                              0xFFF1F0F0),
+                                      borderRadius:
+                                          BorderRadius.only(
+                                        topLeft:
+                                            const Radius
+                                                .circular(
+                                                16),
+                                        topRight:
+                                            const Radius
+                                                .circular(
+                                                16),
+                                        bottomLeft:
+                                            Radius.circular(
+                                                isMe
+                                                    ? 16
+                                                    : 0),
+                                        bottomRight:
+                                            Radius.circular(
+                                                isMe
+                                                    ? 0
+                                                    : 16),
+                                      ),
+                                      border: isMe &&
+                                              !isRevoked
+                                          ? null
+                                          : Border.all(
+                                              color: Colors
+                                                      .grey[
+                                                  200]!),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors
+                                              .black
+                                              .withOpacity(
+                                                  0.01),
+                                          blurRadius: 2,
+                                          offset:
+                                              const Offset(
+                                                  0, 1),
+                                        )
+                                      ],
+                                    ),
+                                    child:
+                                        _buildMessageBody(
+                                            type,
+                                            messageText,
+                                            isRevoked,
+                                            isMe),
+                                  ),
+                                  if (isMe && !isRevoked)
+                                    Padding(
+                                      padding:
+                                          const EdgeInsets
+                                              .only(
+                                              right: 4,
+                                              top: 3,
+                                              bottom: 2),
+                                      child: Text(
+                                        readByList.length >
+                                                1
+                                            ? 'Đã xem (${readByList.length - 1})'
+                                            : 'Đã gửi',
+                                        style: TextStyle(
+                                            color: readByList
+                                                        .length >
+                                                    1
+                                                ? const Color(
+                                                    0xFF0068FF)
+                                                : Colors.grey[
+                                                    500],
+                                            fontSize: 10,
+                                            fontWeight: readByList
+                                                        .length >
+                                                    1
+                                                ? FontWeight
+                                                    .w500
+                                                : FontWeight
+                                                    .normal),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     );
                   },
@@ -557,7 +974,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
             ),
           ),
 
-          // THANH NHẬP TIN NHẮN DƯỚI CÙNG
+          // THANH NHẬP TIN NHẮN DƯỚI CÙNG (Đã nâng cấp Micro & Chọn Ảnh)
           Container(
             color: Colors.grey[100],
             padding: const EdgeInsets.symmetric(
@@ -583,36 +1000,53 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                       child: TextField(
                         controller: _messageController,
                         maxLines: null,
-                        decoration: const InputDecoration(
-                          hintText:
-                              "Nhập tin nhắn vào nhóm...",
+                        enabled:
+                            !_isRecording, // Khóa nhập text khi đang ghi âm thoại
+                        decoration: InputDecoration(
+                          hintText: _isRecording
+                              ? "Đang ghi âm bằng Micro..."
+                              : "Nhập tin nhắn vào nhóm...",
                           hintStyle: TextStyle(
-                              color: Colors.grey,
+                              color: _isRecording
+                                  ? Colors.red
+                                  : Colors.grey,
                               fontSize: 15),
                           contentPadding:
-                              EdgeInsets.symmetric(
+                              const EdgeInsets.symmetric(
                                   horizontal: 16,
                                   vertical: 10),
                           border: InputBorder.none,
                         ),
-                        onSubmitted: (_) => _sendMessage(),
+                        onSubmitted: (_) => _isRecording
+                            ? null
+                            : _sendMessage(),
                       ),
                     ),
                   ),
+                  // Nút ghi âm đa nền tảng đồng bộ
                   IconButton(
-                    icon: const Icon(Icons.mic_none,
-                        color: Color(0xFF5f6368), size: 26),
-                    onPressed: () {},
+                    icon: Icon(
+                        _isRecording
+                            ? Icons.stop_circle
+                            : Icons.mic_none,
+                        color: _isRecording
+                            ? Colors.red
+                            : const Color(0xFF5f6368),
+                        size: 26),
+                    onPressed: _toggleRecording,
                   ),
+                  // Nút chọn gửi ảnh nén dung lượng thấp
                   IconButton(
                     icon: const Icon(Icons.image_outlined,
                         color: Color(0xFF5f6368), size: 26),
-                    onPressed: () {},
+                    onPressed: _handleSendImage,
                   ),
+                  // Nút gửi chữ thường
                   IconButton(
                     icon: const Icon(Icons.send,
                         color: Color(0xFF0068FF), size: 26),
-                    onPressed: _sendMessage,
+                    onPressed:
+                        _isRecording ? null : _sendMessage,
                   ),
                 ],
               ),
