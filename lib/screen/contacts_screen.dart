@@ -3,7 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'chat_screen.dart';
 import 'search_screen.dart';
-import 'group_chat_screen.dart'; // Đã import thêm màn hình chat nhóm vào đây
+import 'group_chat_screen.dart';
 
 class ContactsScreen extends StatelessWidget {
   const ContactsScreen({Key? key}) : super(key: key);
@@ -66,10 +66,93 @@ class ContactsScreen extends StatelessWidget {
 }
 
 // =============================================================================
-// TAB 1: DANH SÁCH BẠN BÈ & LỜI MỜI KẾT BẠN CHỜ DUYỆT
+// TAB 1: DANH SÁCH BẠN BÈ & LỜI MỜI KẾT BẠN CHỜ DUYỆT (CẬP NHẬT HỦY KẾT BẠN)
 // =============================================================================
 class FriendsTab extends StatelessWidget {
   const FriendsTab({Key? key}) : super(key: key);
+
+  // Hàm xử lý hiển thị Dialog và thực hiện Hủy kết bạn 2 chiều
+  void _showUnfriendDialog(
+      BuildContext context,
+      String currentUserId,
+      String targetUid,
+      String targetName) {
+    showDialog(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12)),
+          title: const Text('Xác nhận hủy kết bạn',
+              style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16)),
+          content: Text(
+              'Bạn có muốn huỷ kết bạn với $targetName không?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(
+                  dialogContext), // Lựa chọn "Không" -> Đóng hộp thoại
+              child: const Text('Không',
+                  style: TextStyle(
+                      color: Colors.grey,
+                      fontWeight: FontWeight.bold)),
+            ),
+            TextButton(
+              onPressed: () async {
+                Navigator.pop(
+                    dialogContext); // Đóng hộp thoại trước khi xử lý dữ liệu
+
+                try {
+                  WriteBatch batch =
+                      FirebaseFirestore.instance.batch();
+
+                  // 1. Xóa ID đối phương ra khỏi mảng bạn bè của mình
+                  DocumentReference myDocRef =
+                      FirebaseFirestore.instance
+                          .collection('users')
+                          .doc(currentUserId);
+                  batch.update(myDocRef, {
+                    'friends':
+                        FieldValue.arrayRemove([targetUid])
+                  });
+
+                  // 2. Xóa ID của mình ra khỏi mảng bạn bè của đối phương
+                  DocumentReference targetDocRef =
+                      FirebaseFirestore.instance
+                          .collection('users')
+                          .doc(targetUid);
+                  batch.update(targetDocRef, {
+                    'friends': FieldValue.arrayRemove(
+                        [currentUserId])
+                  });
+
+                  // Thực thi cập nhật 2 chiều đồng thời lên Firestore
+                  await batch.commit();
+
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context)
+                        .showSnackBar(
+                      SnackBar(
+                          backgroundColor: Colors.redAccent,
+                          content: Text(
+                              'Đã hủy kết bạn với $targetName')),
+                    );
+                  }
+                } catch (e) {
+                  print("Lỗi khi hủy kết bạn: $e");
+                }
+              },
+              child: const Text('Có',
+                  style: TextStyle(
+                      color: Colors.red,
+                      fontWeight: FontWeight.bold)),
+            ),
+          ],
+        );
+      },
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -347,8 +430,30 @@ class FriendsTab extends StatelessWidget {
                             style: const TextStyle(
                                 fontWeight:
                                     FontWeight.w600)),
-                        trailing: const Icon(Icons.chat,
-                            color: Color(0xFF0068FF)),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            // NÚT HỦY KẾT BẠN ĐƯỢC THÊM MỚI VÀO ĐÂY
+                            IconButton(
+                              icon: const Icon(
+                                  Icons.person_remove,
+                                  color: Colors.redAccent,
+                                  size: 22),
+                              tooltip: 'Hủy kết bạn',
+                              onPressed: () =>
+                                  _showUnfriendDialog(
+                                      context,
+                                      currentUserId,
+                                      targetUid,
+                                      title),
+                            ),
+                            const SizedBox(width: 4),
+                            // ICON NHẮN TIN GIỮ NGUYÊN
+                            const Icon(Icons.chat,
+                                color: Color(0xFF0068FF),
+                                size: 22),
+                          ],
+                        ),
                         onTap: () {
                           String chatId = currentUserId
                                       .hashCode <=
@@ -356,7 +461,6 @@ class FriendsTab extends StatelessWidget {
                               ? '${currentUserId}_$targetUid'
                               : '${targetUid}_$currentUserId';
 
-                          //Bổ sung thuộc tính receiverId lấy từ dữ liệu đối phương (targetUid)
                           Navigator.push(
                             context,
                             MaterialPageRoute(
@@ -438,8 +542,6 @@ class GroupsTab extends StatelessWidget {
                       fontWeight: FontWeight.w600)),
               subtitle: Text('$totalMembers thành viên'),
               onTap: () {
-                // ĐÃ FIX & ĐỒNG BỘ: Chuyển hướng về GroupChatScreen thay vì ChatScreen
-                // giúp cấu trúc code đồng nhất với chat_list_screen và không bị lỗi thiếu receiverId.
                 Navigator.push(
                   context,
                   MaterialPageRoute(
