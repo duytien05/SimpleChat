@@ -356,7 +356,7 @@ class _SearchScreenState extends State<SearchScreen> {
     );
   }
 
-  // GIAO DIỆN HIỂN THỊ KẾT QUẢ TÌM KIẾM
+  // GIAO DIỆN HIỂN THỊ KẾT QUẢ TÌM KIẾM REALTIME (CẬP NHẬT TRẠNG THÁI NÚT KẾT BẠN)
   Widget _buildSearchResults(String currentUserId) {
     if (_searchResults.isEmpty) {
       return const Center(
@@ -388,7 +388,8 @@ class _SearchScreenState extends State<SearchScreen> {
               return const SizedBox.shrink();
 
             var myData = userSnapshot.data!.data()
-                as Map<String, dynamic>;
+                    as Map<String, dynamic>? ??
+                {};
             List<dynamic> myFriends =
                 myData['friends'] ?? [];
 
@@ -405,6 +406,7 @@ class _SearchScreenState extends State<SearchScreen> {
                   context, currentUserId, targetUid, name);
             }
 
+            // TRƯỜNG HỢP 1: NẾU ĐÃ LÀ BẠN BÈ -> Hiện nút Nhắn tin
             if (myFriends.contains(targetUid)) {
               return ListTile(
                 onTap: handleContactTap,
@@ -412,7 +414,10 @@ class _SearchScreenState extends State<SearchScreen> {
                   backgroundColor: const Color(0xFF0068FF),
                   backgroundImage: avatarImg,
                   child: avatarImg == null
-                      ? Text(name[0].toUpperCase(),
+                      ? Text(
+                          name.isNotEmpty
+                              ? name[0].toUpperCase()
+                              : 'U',
                           style: const TextStyle(
                               color: Colors.white))
                       : null,
@@ -420,8 +425,9 @@ class _SearchScreenState extends State<SearchScreen> {
                 title: Text(name,
                     style: const TextStyle(
                         fontWeight: FontWeight.bold)),
-                subtitle: Text(
-                    userData['phone'] ?? userData['email']),
+                subtitle: Text(userData['phone'] ??
+                    userData['email'] ??
+                    ''),
                 trailing: ElevatedButton.icon(
                   icon: const Icon(Icons.chat,
                       size: 16, color: Colors.white),
@@ -436,68 +442,198 @@ class _SearchScreenState extends State<SearchScreen> {
               );
             }
 
+            // TRƯỜNG HỢP CHƯA LÀ BẠN BÈ -> LẮNG NGHE LỜI MỜI HAI CHIỀU (GỬI ĐI HOẶC NHẬN VỀ)
             return StreamBuilder<DocumentSnapshot>(
               stream: FirebaseFirestore.instance
                   .collection('friend_requests')
                   .doc('${currentUserId}_$targetUid')
                   .snapshots(),
-              builder: (context, requestSnapshot) {
+              builder: (context, outgoingSnapshot) {
+                // Kiểm tra xem mình có gửi lời mời cho họ không
                 bool hasSentRequest =
-                    requestSnapshot.hasData &&
-                        requestSnapshot.data!.exists;
+                    outgoingSnapshot.hasData &&
+                        outgoingSnapshot.data!.exists;
 
-                return ListTile(
-                  onTap: handleContactTap,
-                  leading: CircleAvatar(
-                    backgroundColor:
-                        const Color(0xFF0068FF),
-                    backgroundImage: avatarImg,
-                    child: avatarImg == null
-                        ? Text(name[0].toUpperCase(),
-                            style: const TextStyle(
-                                color: Colors.white))
-                        : null,
-                  ),
-                  title: Text(name,
-                      style: const TextStyle(
-                          fontWeight: FontWeight.bold)),
-                  subtitle: Text(userData['phone'] ??
-                      userData['email']),
-                  trailing: hasSentRequest
-                      ? OutlinedButton(
-                          onPressed: null,
-                          style: OutlinedButton.styleFrom(
-                              side: const BorderSide(
-                                  color: Colors.grey)),
-                          child: const Text(
-                              'Đã gửi lời mời',
-                              style: TextStyle(
-                                  color: Colors.grey)),
-                        )
-                      : ElevatedButton.icon(
-                          icon: const Icon(Icons.person_add,
-                              size: 16,
-                              color: Colors.white),
-                          label: const Text('Kết bạn',
-                              style: TextStyle(
-                                  color: Colors.white)),
-                          style: ElevatedButton.styleFrom(
+                return StreamBuilder<DocumentSnapshot>(
+                  stream: FirebaseFirestore.instance
+                      .collection('friend_requests')
+                      .doc('${targetUid}_$currentUserId')
+                      .snapshots(),
+                  builder: (context, incomingSnapshot) {
+                    // Kiểm tra xem họ có gửi lời mời cho mình không
+                    bool hasIncomingRequest =
+                        incomingSnapshot.hasData &&
+                            incomingSnapshot.data!.exists;
+
+                    Widget trailingButton;
+
+                    if (hasIncomingRequest) {
+                      // TRƯỜNG HỢP 2: HỌ GỬI LỜI MỜI CHO MÌNH -> Hiện 2 nút: Đồng ý & Từ chối
+                      trailingButton = Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.green,
+                              padding: const EdgeInsets
+                                  .symmetric(
+                                  horizontal: 12,
+                                  vertical: 6),
+                              minimumSize: Size.zero,
+                              tapTargetSize:
+                                  MaterialTapTargetSize
+                                      .shrinkWrap,
+                            ),
+                            onPressed: () async {
+                              // Chấp nhận kết bạn: Thêm vào mảng 'friends' của cả hai phía
+                              WriteBatch batch =
+                                  FirebaseFirestore.instance
+                                      .batch();
+
+                              batch.update(
+                                  FirebaseFirestore.instance
+                                      .collection('users')
+                                      .doc(currentUserId),
+                                  {
+                                    'friends': FieldValue
+                                        .arrayUnion(
+                                            [targetUid])
+                                  });
+                              batch.update(
+                                  FirebaseFirestore.instance
+                                      .collection('users')
+                                      .doc(targetUid),
+                                  {
+                                    'friends': FieldValue
+                                        .arrayUnion(
+                                            [currentUserId])
+                                  });
+                              // Xóa tài liệu lời mời sau khi chấp nhận
+                              batch.delete(FirebaseFirestore
+                                  .instance
+                                  .collection(
+                                      'friend_requests')
+                                  .doc(
+                                      '${targetUid}_$currentUserId'));
+
+                              await batch.commit();
+                            },
+                            child: const Text('Đồng ý',
+                                style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 12,
+                                    fontWeight:
+                                        FontWeight.bold)),
+                          ),
+                          const SizedBox(width: 4),
+                          ElevatedButton(
+                            style: ElevatedButton.styleFrom(
                               backgroundColor:
-                                  const Color(0xFF0068FF)),
-                          onPressed: () async {
-                            await FirebaseFirestore.instance
-                                .collection(
-                                    'friend_requests')
-                                .doc(
-                                    '${currentUserId}_$targetUid')
-                                .set({
-                              'senderId': currentUserId,
-                              'receiverId': targetUid,
-                              'timestamp': FieldValue
-                                  .serverTimestamp(),
-                            });
-                          },
+                                  Colors.grey[300],
+                              padding: const EdgeInsets
+                                  .symmetric(
+                                  horizontal: 12,
+                                  vertical: 6),
+                              minimumSize: Size.zero,
+                              tapTargetSize:
+                                  MaterialTapTargetSize
+                                      .shrinkWrap,
+                            ),
+                            onPressed: () async {
+                              // Từ chối kết bạn: Xóa tài liệu lời mời đi
+                              await FirebaseFirestore
+                                  .instance
+                                  .collection(
+                                      'friend_requests')
+                                  .doc(
+                                      '${targetUid}_$currentUserId')
+                                  .delete();
+                            },
+                            child: const Text('Từ chối',
+                                style: TextStyle(
+                                    color: Colors.black87,
+                                    fontSize: 12)),
+                          ),
+                        ],
+                      );
+                    } else if (hasSentRequest) {
+                      // TRƯỜNG HỢP 3: MÌNH ĐÃ GỬI LỜI MỜI -> Hiện nút "Hủy lời mời" màu đỏ
+                      trailingButton = OutlinedButton(
+                        style: OutlinedButton.styleFrom(
+                          side: const BorderSide(
+                              color: Colors.red,
+                              width: 1.2),
+                          padding:
+                              const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 8),
                         ),
+                        onPressed: () async {
+                          // Thu hồi lời mời kết bạn (Xóa tài liệu khỏi Firestore)
+                          await FirebaseFirestore.instance
+                              .collection('friend_requests')
+                              .doc(
+                                  '${currentUserId}_$targetUid')
+                              .delete();
+                        },
+                        child: const Text(
+                          'Hủy lời mời',
+                          style: TextStyle(
+                              color: Colors.red,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 12),
+                        ),
+                      );
+                    } else {
+                      // TRƯỜNG HỢP 4: MẶC ĐỊNH CHƯA CÓ LỜI MỜI -> Hiện nút "Kết bạn" thông thường
+                      trailingButton = ElevatedButton.icon(
+                        icon: const Icon(Icons.person_add,
+                            size: 16, color: Colors.white),
+                        label: const Text('Kết bạn',
+                            style: TextStyle(
+                                color: Colors.white)),
+                        style: ElevatedButton.styleFrom(
+                            backgroundColor:
+                                const Color(0xFF0068FF)),
+                        onPressed: () async {
+                          await FirebaseFirestore.instance
+                              .collection('friend_requests')
+                              .doc(
+                                  '${currentUserId}_$targetUid')
+                              .set({
+                            'senderId': currentUserId,
+                            'receiverId': targetUid,
+                            'timestamp': FieldValue
+                                .serverTimestamp(),
+                          });
+                        },
+                      );
+                    }
+
+                    return ListTile(
+                      onTap: handleContactTap,
+                      leading: CircleAvatar(
+                        backgroundColor:
+                            const Color(0xFF0068FF),
+                        backgroundImage: avatarImg,
+                        child: avatarImg == null
+                            ? Text(
+                                name.isNotEmpty
+                                    ? name[0].toUpperCase()
+                                    : 'U',
+                                style: const TextStyle(
+                                    color: Colors.white))
+                            : null,
+                      ),
+                      title: Text(name,
+                          style: const TextStyle(
+                              fontWeight: FontWeight.bold)),
+                      subtitle: Text(userData['phone'] ??
+                          userData['email'] ??
+                          ''),
+                      trailing: trailingButton,
+                    );
+                  },
                 );
               },
             );
