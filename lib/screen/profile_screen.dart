@@ -38,7 +38,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     super.dispose();
   }
 
-  // Hàm chọn ảnh từ máy tính/thiết bị cá nhân (Tối ưu cho Flutter Web)
+  // Hàm chọn ảnh từ máy tính/thiết bị cá nhân
   Future<void> _pickImage() async {
     try {
       FilePickerResult? result =
@@ -209,6 +209,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   );
                 } catch (e) {
                   if (!mounted) return;
+                  Navigator.pop(context);
                   ScaffoldMessenger.of(context)
                       .showSnackBar(
                     SnackBar(
@@ -225,6 +226,82 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  // ====================================
+  // DIALOG XÁC NHẬN ĐĂNG XUẤT THÔNG MINH
+  // ====================================
+  void _showLogoutConfirmationDialog() {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.logout,
+                  color: Colors.redAccent, size: 26),
+              SizedBox(width: 10),
+              Text('Xác nhận đăng xuất',
+                  style: TextStyle(
+                      fontWeight: FontWeight.bold)),
+            ],
+          ),
+          content: const Text(
+            'Bạn có chắc chắn muốn đăng xuất khỏi phiên làm việc hiện tại không?',
+            style: TextStyle(
+                fontSize: 15, color: Colors.black87),
+          ),
+          actions: [
+            // Lựa chọn 1: HỦY (Ở lại màn hình hiện tại)
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text(
+                'Hủy',
+                style: TextStyle(
+                    color: Colors.grey,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600),
+              ),
+            ),
+            // Lựa chọn 2: ĐĂNG XUẤT (Thoát tài khoản và chuyển hướng về trang Auth)
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.redAccent,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8)),
+              ),
+              onPressed: () async {
+                // Đóng hộp thoại dialog trước
+                Navigator.pop(context);
+
+                // Thực hiện đăng xuất khỏi hệ thống Firebase
+                await FirebaseAuth.instance.signOut();
+
+                if (!mounted) return;
+
+                // Điều hướng về màn hình đăng nhập và xóa sạch lịch sử stack màn hình trước đó
+                Navigator.pushAndRemoveUntil(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => const AuthScreen()),
+                  (route) =>
+                      false, // Xóa toàn bộ các định tuyến cũ để bảo mật thông tin
+                );
+              },
+              child: const Text(
+                'Đăng xuất',
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -388,6 +465,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ),
                 ),
                 const SizedBox(height: 40),
+
+                // NÚT ĐĂNG XUẤT ĐÃ ĐƯỢC LIÊN KẾT VỚI DIALOG XÁC NHẬN MỚI
                 ElevatedButton(
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.red,
@@ -397,15 +476,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         borderRadius:
                             BorderRadius.circular(8)),
                   ),
-                  onPressed: () async {
-                    await FirebaseAuth.instance.signOut();
-                    if (!mounted) return;
-                    Navigator.pushReplacement(
-                        context,
-                        MaterialPageRoute(
-                            builder: (_) =>
-                                const AuthScreen()));
-                  },
+                  onPressed:
+                      _showLogoutConfirmationDialog, // Gọi hàm mở dialog xác nhận
                   child: const Text('ĐĂNG XUẤT',
                       style: TextStyle(
                           color: Colors.white,
