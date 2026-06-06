@@ -4,13 +4,12 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'chat_screen.dart';
 import 'search_screen.dart';
 import 'create_group_screen.dart';
-import 'group_chat_screen.dart'; // Đã đảm bảo import đúng file nhóm mới
+import 'group_chat_screen.dart';
 
 class ChatListScreen extends StatelessWidget {
-  const ChatListScreen(
-      {super.key}); // Sửa lỗi linting: Sử dụng super.key chuẩn Flutter mới
+  const ChatListScreen({super.key});
 
-  // Hàm hỗ trợ tính toán thời gian hiển thị kiểu Zalo
+  // Hàm hỗ trợ tính toán thời gian hiển thị
   String _formatTimestamp(Timestamp? timestamp) {
     if (timestamp == null) {
       return '';
@@ -324,7 +323,7 @@ class ChatListScreen extends StatelessWidget {
                         ],
                       ),
                       onTap: () {
-                        // ĐÃ FIX: Truyền thêm thuộc tính receiverId vào ChatScreen tại đây
+                        //Truyền thêm thuộc tính receiverId vào ChatScreen để ChatScreen có thể sử dụng cho các tính năng như ghim tin nhắn, thu hồi tin nhắn, v.v.
                         Navigator.push(
                           context,
                           MaterialPageRoute(
@@ -332,8 +331,7 @@ class ChatListScreen extends StatelessWidget {
                               chatId: chatId,
                               currentUserId: currentUserId,
                               receiverName: title,
-                              receiverId:
-                                  receiverId, // 👈 ĐÃ THÊM DÒNG NÀY ĐỂ XÓA LỖI ĐỎ
+                              receiverId: receiverId,
                             ),
                           ),
                         );
