@@ -71,6 +71,7 @@ class _AuthScreenState extends State<AuthScreen> {
     final phone = _phoneController.text.trim();
     final birthDate = _birthDateController.text.trim();
 
+    // 1. Kiểm tra Email và Mật khẩu chung cho cả Đăng nhập & Đăng ký
     if (email.isEmpty || password.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -80,22 +81,60 @@ class _AuthScreenState extends State<AuthScreen> {
       return;
     }
 
+    // 2. Kiểm tra định dạng Email hợp lệ (Ví dụ: duytien@gmail.com)
+    final emailRegex =
+        RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$');
+    if (!emailRegex.hasMatch(email)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text(
+                'Email không đúng định dạng! (Ví dụ hợp lệ: name@gmail.com)')),
+      );
+      return;
+    }
+
+    // Các bước kiểm tra nghiệp vụ chỉ áp dụng khi người dùng ĐANG ĐĂNG KÝ
     if (!isLogin) {
       if (name.isEmpty ||
           phone.isEmpty ||
-          birthDate.isEmpty) {
+          birthDate.isEmpty ||
+          confirmPassword.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
               content: Text(
-                  'Vui lòng điền đầy đủ các thông tin cá nhân (bao gồm Ngày sinh)')),
+                  'Vui lòng điền đầy đủ tất cả các thông tin cá nhân')),
         );
         return;
       }
+
+      // Kiểm tra Họ và Tên: Chỉ cho phép chữ cái tiếng Anh/Việt, dấu chấm và khoảng trắng
+      final nameRegex = RegExp(r'^[a-zA-ZÀ-ỹ\s.]+$');
+      if (!nameRegex.hasMatch(name)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text(
+                  'Họ và tên chỉ được phép chứa chữ cái, dấu chấm và khoảng trắng (Không chứa số hoặc ký tự đặc biệt)')),
+        );
+        return;
+      }
+
+      // Kiểm tra Số điện thoại: Phải là chuỗi gồm đúng 10 chữ số, không chứa ký tự khác
+      final phoneRegex = RegExp(r'^\d{10}$');
+      if (!phoneRegex.hasMatch(phone)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text(
+                  'Số điện thoại không hợp lệ! Phải có đúng 10 chữ số và không chứa ký tự khác')),
+        );
+        return;
+      }
+
+      // Kiểm tra Xác nhận lại mật khẩu
       if (password != confirmPassword) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
               content: Text(
-                  'Mật khẩu nhập lại không trùng khớp!')),
+                  'Mật khẩu xác nhận lại không trùng khớp!')),
         );
         return;
       }
@@ -125,7 +164,7 @@ class _AuthScreenState extends State<AuthScreen> {
           password: password,
         );
 
-        // ĐỒNG BỘ: Cập nhật thông tin thực tế vào Firestore, bao gồm Ngày sinh đã chọn
+        // Đồng bộ dữ liệu vào Firestore
         await FirebaseFirestore.instance
             .collection('users')
             .doc(userCredential.user!.uid)
@@ -134,8 +173,7 @@ class _AuthScreenState extends State<AuthScreen> {
           'displayName': name,
           'email': email,
           'phone': phone,
-          'birthDate':
-              birthDate, // 👈 Đã truyền chính xác biến dữ liệu ngày sinh vào Firestore từ khi đăng ký
+          'birthDate': birthDate,
           'photoUrl':
               'https://ui-avatars.com/api/?name=$name&background=0D8ABC&color=fff',
           'friends': [],
@@ -174,8 +212,7 @@ class _AuthScreenState extends State<AuthScreen> {
     );
 
     return Scaffold(
-      backgroundColor: Colors.grey[
-          200], // Đổi màu nền qua màu xám nhạt đồng bộ theo yêu cầu của bạn
+      backgroundColor: Colors.grey[200],
       appBar: AppBar(
         iconTheme: const IconThemeData(color: Colors.white),
         backgroundColor: const Color(0xFF0068FF),
