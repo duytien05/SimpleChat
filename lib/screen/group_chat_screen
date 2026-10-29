@@ -1,14 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'dart:convert'; // Đọc chuỗi ảnh Base64 từ bộ nhớ Web
-import 'package:image_picker/image_picker.dart'; // Chọn ảnh từ thiết bị
-import 'package:image/image.dart'
-    as img; // Nén dung lượng ảnh
-import 'package:record/record.dart'; // Ghi âm đa nền tảng (Web & Mobile)
+import 'dart:convert';
+import 'package:image_picker/image_picker.dart';
+import 'package:image/image.dart' as img;
+import 'package:record/record.dart';
 import '../services/group_info.dart';
 import '../services/chat_interaction_service.dart';
-import '../services/voice_message_bubble.dart'; // Import Widget nghe nhạc thoại của bạn
+import '../services/voice_message_bubble.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import '../services/document_picker_service.dart';
+import '../widgets/document_message_bubble.dart';
 
 class GroupChatScreen extends StatefulWidget {
   final String chatId;
@@ -34,7 +36,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       FirebaseAuth.instance.currentUser!.uid;
   String myDisplayName = "Thành viên";
 
-  // Cấu hình các đối tượng phục vụ ghi âm
   final AudioRecorder _audioRecorder = AudioRecorder();
   bool _isRecording = false;
 
@@ -43,7 +44,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     super.initState();
     _loadMyProfile();
 
-    // Mỗi khi người dùng vào nhóm chat, tự động đánh dấu các tin nhắn mới là "Đã xem"
     ChatInteractionService.markMessagesAsRead(
       chatId: widget.chatId,
       currentUserId: currentUserId,
@@ -54,8 +54,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   void dispose() {
     _messageController.dispose();
     _scrollController.dispose();
-    _audioRecorder
-        .dispose(); // Giải phóng bộ nhớ trình ghi âm khi thoát nhóm
+    _audioRecorder.dispose();
     super.dispose();
   }
 
@@ -72,7 +71,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     }
   }
 
-  // Hàm giải mã hiển thị ảnh an toàn từ chuỗi Base64
   ImageProvider? _parseImageBase64(String base64Str) {
     try {
       if (base64Str.startsWith('data:image')) {
@@ -85,9 +83,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     }
   }
 
-  // ===========================================================================
-  // LOGIC HIỂN THỊ DANH SÁCH BẠN BÈ & THÊM THÀNH VIÊN (ĐÃ SỬA CHỈ HIỆN BẠN BÈ)
-  // ===========================================================================
   void _showAddMemberBottomSheet() async {
     DocumentSnapshot chatDoc = await FirebaseFirestore
         .instance
@@ -143,7 +138,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                   const Divider(),
                   const SizedBox(height: 8),
                   Expanded(
-                    // BƯỚC 1: Lắng nghe tài liệu cá nhân của mình để lấy danh sách UID bạn bè (mảng 'friends')
                     child: StreamBuilder<DocumentSnapshot>(
                       stream: FirebaseFirestore.instance
                           .collection('users')
@@ -164,7 +158,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                         List<dynamic> myFriendsList =
                             myData['friends'] ?? [];
 
-                        // Trường hợp bạn chưa kết bạn với ai cả
                         if (myFriendsList.isEmpty) {
                           return const Center(
                             child: Text(
@@ -177,7 +170,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                           );
                         }
 
-                        // BƯỚC 2: Truy vấn collection 'users' dùng bộ lọc 'whereIn' chỉ lấy những người có trong danh sách bạn bè
                         return StreamBuilder<QuerySnapshot>(
                           stream: FirebaseFirestore.instance
                               .collection('users')
@@ -191,7 +183,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                       CircularProgressIndicator());
                             }
 
-                            // BƯỚC 3: Lọc bỏ những người bạn đã nằm sẵn trong nhóm chat từ trước
                             var friends = snapshot
                                 .data!.docs
                                 .where((doc) {
@@ -355,13 +346,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     );
   }
 
-  // 1. GỬI TIN NHẮN CHỮ VÀO NHÓM
   void _sendMessage() async {
     String msg = _messageController.text.trim();
     if (msg.isEmpty) return;
 
-    _messageController
-        .clear(); // Xóa chữ ô nhập lập tức tránh double-send
+    _messageController.clear();
 
     await ChatInteractionService.sendMessageWithStatus(
       chatId: widget.chatId,
@@ -375,7 +364,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     _scrollToBottom();
   }
 
-  // 2. GỬI HÌNH ẢNH NÉN VÀO NHÓM CHAT
   void _handleSendImage() async {
     final ImagePicker picker = ImagePicker();
     final XFile? pickedFile =
@@ -386,11 +374,10 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         var bytes = await pickedFile.readAsBytes();
         img.Image? decoded = img.decodeImage(bytes);
         if (decoded != null) {
-          img.Image resized = img.copyResize(decoded,
-              width: 500); // Đưa về bề rộng tối ưu 500px
-          List<int> compressed = img.encodeJpg(resized,
-              quality:
-                  60); // Giảm chất lượng lưu trữ xuống 60%
+          img.Image resized =
+              img.copyResize(decoded, width: 500);
+          List<int> compressed =
+              img.encodeJpg(resized, quality: 60);
           String base64Image =
               "data:image/jpeg;base64,${base64Encode(compressed)}";
 
@@ -411,7 +398,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     }
   }
 
-  // 3. XỬ LÝ BẬT / DỪNG GHI ÂM TIN NHẮN THOẠI NHÓM
   void _toggleRecording() async {
     if (_isRecording) {
       final path = await _audioRecorder.stop();
@@ -443,8 +429,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       if (await _audioRecorder.hasPermission()) {
         await _audioRecorder.start(
           const RecordConfig(
-            encoder: AudioEncoder
-                .opus, // Định dạng chuẩn Opus chạy mượt đa nền tảng
+            encoder: AudioEncoder.opus,
             bitRate: 16000,
             sampleRate: 16000,
           ),
@@ -469,7 +454,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     });
   }
 
-  // 4. HÀM RENDER LINH HOẠT NỘI DUNG TIN NHẮN THEO LOẠI TYPE
   Widget _buildMessageBody(String type, String content,
       bool isRevoked, bool isMe) {
     if (isRevoked) {
@@ -499,13 +483,12 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                 style: TextStyle(color: Colors.red));
 
       case 'audio':
-        // Gọi Widget giải mã chuỗi base64 và thực hiện click nghe nhạc thoại
         return VoiceMessageBubble(
           base64Audio: content,
           isMe: isMe,
         );
 
-      default: // 'text'
+      default:
         return Text(
           content,
           style: TextStyle(
@@ -679,8 +662,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
               );
             },
           ),
-
-          // DANH SÁCH TIN NHẮN REALTIME
           Expanded(
             child: StreamBuilder<QuerySnapshot>(
               stream: FirebaseFirestore.instance
@@ -732,6 +713,26 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                             msgData['text'] ??
                             "";
 
+                    if (type == 'document') {
+                      final user =
+                          FirebaseAuth.instance.currentUser;
+                      final myUid =
+                          user?.uid ?? currentUserId;
+                      final myName = user?.displayName ??
+                          user?.email?.split('@').first ??
+                          'Thành viên';
+                      final myPhoto = user?.photoURL ?? '';
+
+                      return DocumentMessageBubble(
+                        messageData: msgData,
+                        messageId: messageId,
+                        chatId: widget.chatId,
+                        currentUserId: myUid,
+                        currentUserName: myName,
+                        currentUserPhoto: myPhoto,
+                      );
+                    }
+
                     return GestureDetector(
                       onLongPress: () {
                         if (!isRevoked) {
@@ -764,8 +765,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                       senderName:
                                           senderName,
                                       isGroup: true,
-                                      type:
-                                          type, // Đồng bộ truyền type ghim hình ảnh/voice
+                                      type: type,
                                     );
                                   },
                                   child: const Text(
@@ -973,8 +973,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
               },
             ),
           ),
-
-          // THANH NHẬP TIN NHẮN DƯỚI CÙNG (Đã nâng cấp Micro & Chọn Ảnh)
           Container(
             color: Colors.grey[100],
             padding: const EdgeInsets.symmetric(
@@ -986,6 +984,27 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                     icon: const Icon(Icons.insert_emoticon,
                         color: Color(0xFF5f6368), size: 26),
                     onPressed: () {},
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.attach_file,
+                        color: Colors.grey),
+                    onPressed: () {
+                      final user =
+                          FirebaseAuth.instance.currentUser;
+                      final uid = user?.uid ?? '';
+                      final userName = user?.displayName ??
+                          user?.email?.split('@').first ??
+                          'Người dùng';
+
+                      DocumentPickerService
+                          .pickAndSendDocument(
+                        context: context,
+                        chatId: widget.chatId,
+                        currentUserId: uid,
+                        currentUserName: userName,
+                        isGroup: true,
+                      );
+                    },
                   ),
                   Expanded(
                     child: Container(
@@ -1000,8 +1019,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                       child: TextField(
                         controller: _messageController,
                         maxLines: null,
-                        enabled:
-                            !_isRecording, // Khóa nhập text khi đang ghi âm thoại
+                        enabled: !_isRecording,
                         decoration: InputDecoration(
                           hintText: _isRecording
                               ? "Đang ghi âm bằng Micro..."
@@ -1023,7 +1041,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                       ),
                     ),
                   ),
-                  // Nút ghi âm đa nền tảng đồng bộ
                   IconButton(
                     icon: Icon(
                         _isRecording
@@ -1035,13 +1052,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                         size: 26),
                     onPressed: _toggleRecording,
                   ),
-                  // Nút chọn gửi ảnh nén dung lượng thấp
                   IconButton(
                     icon: const Icon(Icons.image_outlined,
                         color: Color(0xFF5f6368), size: 26),
                     onPressed: _handleSendImage,
                   ),
-                  // Nút gửi chữ thường
                   IconButton(
                     icon: const Icon(Icons.send,
                         color: Color(0xFF0068FF), size: 26),
@@ -1058,7 +1073,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   }
 }
 
-// COMPONENT TỰ ĐỘNG MAP AVATAR THÀNH VIÊN REALTIME
 class GroupSenderAvatarWidget extends StatelessWidget {
   final String senderId;
   final String fallbackName;
