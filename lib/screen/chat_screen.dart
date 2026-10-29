@@ -1,20 +1,24 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'dart:convert'; // Đọc chuỗi Base64
-import 'package:image_picker/image_picker.dart'; // Chọn ảnh từ thiết bị
+import 'dart:convert';
+import 'package:image_picker/image_picker.dart';
 import 'package:image/image.dart' as img;
 import 'package:record/record.dart';
 import 'chat_options_screen.dart';
 import '../services/chat_interaction_service.dart';
 import '../services/voice_message_bubble.dart';
+import '../services/call_service.dart';
+import 'active_call_screen.dart';
+import 'outgoing_call_screen.dart';
+import '../services/document_picker_service.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import '../widgets/document_message_bubble.dart';
 
 class ChatScreen extends StatefulWidget {
-  final String
-      chatId; // ID phòng chat (ví dụ: 'user1_user2')
-  final String currentUserId; // ID của bạn
-  final String receiverName; // Tên người nhận
-  final String
-      receiverId; // ID người nhận để lấy dữ liệu tùy chọn
+  final String chatId;
+  final String currentUserId;
+  final String receiverName;
+  final String receiverId;
 
   const ChatScreen({
     super.key,
@@ -32,14 +36,12 @@ class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _messageController =
       TextEditingController();
 
-  // Khai báo đối tượng ghi âm
   final AudioRecorder _audioRecorder = AudioRecorder();
   bool _isRecording = false;
 
   @override
   void initState() {
     super.initState();
-    // Mỗi khi mở phòng chat, tự động đánh dấu toàn bộ tin nhắn đối phương gửi là "Đã xem"
     ChatInteractionService.markMessagesAsRead(
       chatId: widget.chatId,
       currentUserId: widget.currentUserId,
@@ -49,11 +51,10 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void dispose() {
     _messageController.dispose();
-    _audioRecorder.dispose(); // Giải phóng bộ nhớ ghi âm
+    _audioRecorder.dispose();
     super.dispose();
   }
 
-  // Hàm định dạng thời gian tin nhắn chi tiết (Giờ:Phút)
   String _formatMessageTime(Timestamp? timestamp) {
     if (timestamp == null) return '';
     DateTime dateTime = timestamp.toDate();
@@ -63,7 +64,6 @@ class _ChatScreenState extends State<ChatScreen> {
     return '$hour:$minute';
   }
 
-  // Hàm giải mã chuỗi Base64 hiển thị ảnh an toàn
   ImageProvider? _parseImageBase64(String base64Str) {
     try {
       if (base64Str.startsWith('data:image')) {
@@ -76,13 +76,11 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  // 1. Xử lý gửi tin nhắn chữ thông thường
   void _sendMessage() async {
     String msg = _messageController.text.trim();
     if (msg.isEmpty) return;
 
-    _messageController
-        .clear(); // Xóa chữ ô nhập ngay lập tức để tránh gửi trùng
+    _messageController.clear();
 
     await ChatInteractionService.sendMessageWithStatus(
       chatId: widget.chatId,
@@ -94,7 +92,6 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  // 2. Xử lý chọn ảnh, nén dung lượng xuống cực nhẹ và gửi lên Firestore
   void _handleSendImage() async {
     final ImagePicker picker = ImagePicker();
     final XFile? pickedFile =
@@ -105,10 +102,8 @@ class _ChatScreenState extends State<ChatScreen> {
         var bytes = await pickedFile.readAsBytes();
         img.Image? decoded = img.decodeImage(bytes);
         if (decoded != null) {
-          // Resize chiều rộng về 500px tối ưu lưu trữ Firestore dưới 1MB
           img.Image resized =
               img.copyResize(decoded, width: 500);
-          // Nén chất lượng ảnh JPG xuống 60%
           List<int> compressed =
               img.encodeJpg(resized, quality: 60);
           String base64Image =
@@ -130,7 +125,6 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  // 3. Xử lý Bật/Dừng Ghi âm trực tiếp đa nền tảng
   void _toggleRecording() async {
     if (_isRecording) {
       final path = await _audioRecorder.stop();
@@ -140,7 +134,6 @@ class _ChatScreenState extends State<ChatScreen> {
 
       if (path != null) {
         try {
-          // Đọc luồng dữ liệu file ghi âm sang chuỗi Base64
           final bytes = await XFile(path).readAsBytes();
           String base64Audio =
               "data:audio/webm;base64,${base64Encode(bytes)}";
@@ -160,7 +153,6 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     } else {
       if (await _audioRecorder.hasPermission()) {
-        // Cấu hình ghi âm bitrate thấp để giảm tải dữ liệu text lên Firestore
         await _audioRecorder.start(
           const RecordConfig(
               encoder: AudioEncoder.opus,
@@ -175,7 +167,6 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  // 4. Widget render linh hoạt nội dung tin nhắn theo 'type'
   Widget _buildMessageBody(String type, String content,
       bool isRevoked, bool isMe) {
     if (isRevoked) {
@@ -205,13 +196,12 @@ class _ChatScreenState extends State<ChatScreen> {
                 style: TextStyle(color: Colors.red));
 
       case 'audio':
-        // Gọi widget xử lý âm thanh động của bạn trong thư mục services
         return VoiceMessageBubble(
           base64Audio: content,
           isMe: isMe,
         );
 
-      default: // 'text'
+      default:
         return Text(
           content,
           style: TextStyle(
@@ -241,24 +231,14 @@ class _ChatScreenState extends State<ChatScreen> {
           IconButton(
             icon: const Icon(Icons.phone,
                 color: Colors.white),
-            onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                    content: Text(
-                        'Chức năng gọi điện đang phát triển')),
-              );
-            },
+            onPressed: () =>
+                _handleMakeCall(hasVideo: false),
           ),
           IconButton(
             icon: const Icon(Icons.video_call,
                 color: Colors.white, size: 28),
-            onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                    content: Text(
-                        'Chức năng gọi video đang phát triển')),
-              );
-            },
+            onPressed: () =>
+                _handleMakeCall(hasVideo: true),
           ),
           IconButton(
             icon:
@@ -279,7 +259,6 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
       body: Column(
         children: [
-          // ============ THANH HIỂN THỊ TIN NHẮN GHIM REALTIME ============
           StreamBuilder<DocumentSnapshot>(
             stream: FirebaseFirestore.instance
                 .collection('chats')
@@ -352,8 +331,6 @@ class _ChatScreenState extends State<ChatScreen> {
               );
             },
           ),
-
-          // ============ VÙNG HIỂN THỊ TIN NHẮN REALTIME ============
           Expanded(
             child: StreamBuilder<QuerySnapshot>(
               stream: FirebaseFirestore.instance
@@ -401,6 +378,25 @@ class _ChatScreenState extends State<ChatScreen> {
                             data['text'] ??
                             '';
 
+                    if (type == 'document') {
+                      final user =
+                          FirebaseAuth.instance.currentUser;
+                      final myUid = widget.currentUserId;
+                      final myName = user?.displayName ??
+                          user?.email?.split('@').first ??
+                          'Người dùng';
+                      final myPhoto = user?.photoURL ?? '';
+
+                      return DocumentMessageBubble(
+                        messageData: data,
+                        messageId: messageId,
+                        chatId: widget.chatId,
+                        currentUserId: myUid,
+                        currentUserName: myName,
+                        currentUserPhoto: myPhoto,
+                      );
+                    }
+
                     return GestureDetector(
                       onLongPress: () {
                         if (!isRevoked) {
@@ -432,8 +428,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                           currentMessageText,
                                       senderName: '',
                                       isGroup: false,
-                                      type:
-                                          type, // Truyền type vào hàm ghim mới
+                                      type: type,
                                     );
                                   },
                                   child: const Text(
@@ -647,8 +642,6 @@ class _ChatScreenState extends State<ChatScreen> {
               },
             ),
           ),
-
-          // ============ THANH NHẬP TIN NHẮN MỚI (Tích hợp sự kiện Chọn ảnh & Mic) ============
           Container(
             color: Colors.grey[100],
             padding: const EdgeInsets.symmetric(
@@ -660,6 +653,27 @@ class _ChatScreenState extends State<ChatScreen> {
                     icon: const Icon(Icons.insert_emoticon,
                         color: Color(0xFF5f6368), size: 26),
                     onPressed: () {},
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.attach_file,
+                        color: Colors.grey),
+                    onPressed: () {
+                      final user =
+                          FirebaseAuth.instance.currentUser;
+                      final uid = user?.uid ?? '';
+                      final userName = user?.displayName ??
+                          user?.email?.split('@').first ??
+                          'Người dùng';
+
+                      DocumentPickerService
+                          .pickAndSendDocument(
+                        context: context,
+                        chatId: widget.chatId,
+                        currentUserId: uid,
+                        currentUserName: userName,
+                        isGroup: false,
+                      );
+                    },
                   ),
                   Expanded(
                     child: Container(
@@ -674,8 +688,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       child: TextField(
                         controller: _messageController,
                         maxLines: null,
-                        enabled:
-                            !_isRecording, // Khóa ô nhập text khi đang ghi âm
+                        enabled: !_isRecording,
                         decoration: InputDecoration(
                           hintText: _isRecording
                               ? "Đang ghi âm bằng Micro..."
@@ -694,7 +707,6 @@ class _ChatScreenState extends State<ChatScreen> {
                       ),
                     ),
                   ),
-                  // Nút Ghi âm (Bấm 1 lần để bật ghi, bấm lần nữa để dừng và gửi tự động)
                   IconButton(
                     icon: Icon(
                         _isRecording
@@ -706,13 +718,11 @@ class _ChatScreenState extends State<ChatScreen> {
                         size: 26),
                     onPressed: _toggleRecording,
                   ),
-                  // Nút Chọn hình ảnh
                   IconButton(
                     icon: const Icon(Icons.image_outlined,
                         color: Color(0xFF5f6368), size: 26),
                     onPressed: _handleSendImage,
                   ),
-                  // Nút Gửi chữ thường
                   IconButton(
                     icon: const Icon(Icons.send,
                         color: Color(0xFF0068FF), size: 26),
@@ -727,9 +737,76 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
     );
   }
+
+  void _handleMakeCall({required bool hasVideo}) async {
+    final CallService callService = CallService();
+
+    try {
+      DocumentSnapshot callerDoc = await FirebaseFirestore
+          .instance
+          .collection('users')
+          .doc(widget.currentUserId)
+          .get();
+
+      Map<String, dynamic> callerData =
+          (callerDoc.data() as Map<String, dynamic>?) ?? {};
+      String callerName =
+          callerData['displayName'] ?? 'Người dùng';
+      String callerPhoto = callerData['photoUrl'] ?? '';
+
+      DocumentSnapshot receiverDoc = await FirebaseFirestore
+          .instance
+          .collection('users')
+          .doc(widget.receiverId)
+          .get();
+
+      Map<String, dynamic> receiverData =
+          (receiverDoc.data() as Map<String, dynamic>?) ??
+              {};
+      String receiverName =
+          receiverData['displayName'] ?? 'Người nhận';
+      String receiverPhoto = receiverData['photoUrl'] ?? '';
+
+      String callId = await callService.makeCall(
+        chatId: widget.chatId,
+        callerId: widget.currentUserId,
+        callerDisplayName: callerName,
+        callerPhotoUrl: callerPhoto,
+        receiverIds: [widget.receiverId],
+        receiverDisplayName: receiverName,
+        receiverPhotoUrl: receiverPhoto,
+        hasVideo: hasVideo,
+        isGroup: false,
+      );
+
+      if (!mounted) return;
+
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => OutgoingCallScreen(
+            callId: callId,
+            chatId: widget.chatId,
+            callerId: widget.currentUserId,
+            receiverDisplayName: receiverName,
+            receiverPhotoUrl: receiverPhoto,
+            hasVideo: hasVideo,
+          ),
+        ),
+      );
+    } catch (e) {
+      debugPrint("Lỗi khởi tạo cuộc gọi: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content:
+                  Text('Không thể thực hiện cuộc gọi: $e')),
+        );
+      }
+    }
+  }
 }
 
-// Giữ nguyên Component hiển thị avatar đối phương
 class ReceiverAvatarWidget extends StatelessWidget {
   final String receiverId;
   final String receiverName;
