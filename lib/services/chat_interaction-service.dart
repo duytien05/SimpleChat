@@ -1,7 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 class ChatInteractionService {
-  // 1. Hàm gửi tin nhắn
   static Future<void> sendMessageWithStatus({
     required String chatId,
     required String senderId,
@@ -9,8 +8,12 @@ class ChatInteractionService {
     required String messageText,
     required bool isGroup,
     String type = 'text',
+    String? fileUrl,
+    String? fileName,
+    String? fileType,
+    String? fileSize,
   }) async {
-    final messageData = {
+    final messageData = <String, dynamic>{
       'senderId': senderId,
       'senderName': senderName,
       'message': messageText,
@@ -21,21 +24,30 @@ class ChatInteractionService {
       'readBy': [senderId],
     };
 
+    if (type == 'document') {
+      messageData['fileUrl'] = fileUrl ?? '';
+      messageData['fileName'] = fileName ?? 'Tài liệu';
+      messageData['fileType'] = fileType ?? 'pdf';
+      messageData['fileSize'] = fileSize ?? '0 MB';
+      messageData['isSharedToHub'] = false;
+    }
+
     await FirebaseFirestore.instance
         .collection('chats')
         .doc(chatId)
         .collection('messages')
         .add(messageData);
 
-    // Tối ưu nội dung hiển thị Last Message ở danh sách chat bên ngoài
     String lastMsgDisplay = messageText;
     if (type == 'image') {
       lastMsgDisplay = '[Hình ảnh]';
     } else if (type == 'audio') {
       lastMsgDisplay = '[Tin nhắn thoại]';
+    } else if (type == 'document') {
+      lastMsgDisplay =
+          '[Tài liệu] ${fileName ?? "File đính kèm"}';
     }
 
-    // Cập nhật Last Message danh sách chat bên ngoài
     await FirebaseFirestore.instance
         .collection('chats')
         .doc(chatId)
@@ -47,7 +59,56 @@ class ChatInteractionService {
     });
   }
 
-  // 2. Hàm THU HỒI TIN NHẮN (Giữ nguyên logic cũ)
+  static Future<void> shareDocumentToPublicHub({
+    required String chatId,
+    required String messageId,
+    required String title,
+    required String description,
+    required String category,
+    required String fileUrl,
+    required String fileType,
+    required String fileSize,
+    required String uploadedBy,
+    required String uploaderName,
+    required String uploaderPhoto,
+  }) async {
+    try {
+      String docId = FirebaseFirestore.instance
+          .collection('documents')
+          .doc()
+          .id;
+
+      await FirebaseFirestore.instance
+          .collection('documents')
+          .doc(docId)
+          .set({
+        'docId': docId,
+        'title': title,
+        'description': description,
+        'category': category,
+        'fileUrl': fileUrl,
+        'fileType': fileType,
+        'fileSize': fileSize,
+        'uploadedBy': uploadedBy,
+        'uploaderName': uploaderName,
+        'uploaderPhoto': uploaderPhoto,
+        'sourceChatId': chatId,
+        'isPublic': true,
+        'downloadCount': 0,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+
+      await FirebaseFirestore.instance
+          .collection('chats')
+          .doc(chatId)
+          .collection('messages')
+          .doc(messageId)
+          .update({'isSharedToHub': true});
+    } catch (e) {
+      print("Lỗi khi chia sẻ tài liệu lên Hub: $e");
+    }
+  }
+
   static Future<void> revokeMessage({
     required String chatId,
     required String messageId,
@@ -55,20 +116,17 @@ class ChatInteractionService {
     required bool isGroup,
   }) async {
     try {
-      // Sửa nội dung tin nhắn trong Sub-collection thành thông báo thu hồi
       await FirebaseFirestore.instance
           .collection('chats')
           .doc(chatId)
           .collection('messages')
           .doc(messageId)
           .update({
-        'message':
-            'Tin nhắn đã bị thu hồi', // Đè dữ liệu văn bản cũ
-        'type': 'text', // Trả type về text khi bị thu hồi
+        'message': 'Tin nhắn đã bị thu hồi',
+        'type': 'text',
         'isRevoked': true,
       });
 
-      // Cập nhật Last Message hiển thị ngoài màn hình danh sách chat
       String lastMsgDisplay = isGroup
           ? '$senderName: Tin nhắn đã bị thu hồi'
           : 'Tin nhắn đã bị thu hồi';
@@ -85,7 +143,6 @@ class ChatInteractionService {
     }
   }
 
-  // 3. Đánh dấu đã xem (Giữ nguyên logic cũ)
   static Future<void> markMessagesAsRead({
     required String chatId,
     required String currentUserId,
@@ -107,15 +164,13 @@ class ChatInteractionService {
     }
   }
 
-  // 4. TÍNH NĂNG GHIM TIN NHẮN (ĐÃ CẬP NHẬT: Thêm xử lý chữ hiển thị thanh ghim nếu ghim Ảnh/Audio)
   static Future<void> pinMessage({
     required String chatId,
     required String messageId,
     required String messageText,
     required String senderName,
     required bool isGroup,
-    String type =
-        'text', // Nhận thêm type để xử lý chuỗi hiển thị trên thanh ghim
+    String type = 'text',
   }) async {
     try {
       String pinDisplay = messageText;
@@ -123,17 +178,17 @@ class ChatInteractionService {
         pinDisplay = '[Hình ảnh]';
       } else if (type == 'audio') {
         pinDisplay = '[Tin nhắn thoại]';
+      } else if (type == 'document') {
+        pinDisplay = '[Tài liệu] $messageText';
       }
 
-      // Lưu thông tin bản ghi ghim trực tiếp vào Document tổng của phòng chat
       await FirebaseFirestore.instance
           .collection('chats')
           .doc(chatId)
           .update({
         'pinnedMessage': {
           'messageId': messageId,
-          'message':
-              pinDisplay, // Lưu text hoặc chữ đại diện [Hình ảnh]/[Tin nhắn thoại]
+          'message': pinDisplay,
           'senderName': isGroup ? senderName : 'Đối phương',
           'pinnedAt': FieldValue.serverTimestamp(),
         }
@@ -143,7 +198,6 @@ class ChatInteractionService {
     }
   }
 
-  // 5. TÍNH NĂNG GỠ GHIM TIN NHẮN (Giữ nguyên logic cũ)
   static Future<void> unpinMessage(
       {required String chatId}) async {
     try {
