@@ -5,7 +5,6 @@ import 'screen/auth_screen.dart';
 import 'screen/main_navigation.dart';
 
 void main() async {
-  // Đảm bảo các dịch vụ nền của hệ thống Flutter Web được khởi tạo đầy đủ trước tiên
   WidgetsFlutterBinding.ensureInitialized();
 
   await Firebase.initializeApp(
